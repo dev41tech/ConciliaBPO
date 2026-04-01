@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -r \"port\\\\|PORT\\\\|5173\\\\|3000\\\\|8080\\\\|localhost\" 'C:\\\\Users\\\\kauan.brasileiro\\\\Documents\\\\Conciliador BPO/src' --include=*.ts --include=*.tsx --include=*.js)"
+    ]
+  }
+}
