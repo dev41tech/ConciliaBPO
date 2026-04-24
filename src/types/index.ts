@@ -20,6 +20,8 @@ export interface BaseConfig {
 export interface ReconciliationConfig {
   base1: BaseConfig;
   base2: BaseConfig;
+  // Diferença máxima tolerada entre os valores (0 = correspondência exata)
+  valueTolerance: number;
 }
 
 // Status possíveis de um registro

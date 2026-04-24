@@ -5,8 +5,8 @@ import type { UploadedFile, ReconciliationConfig, BaseConfig } from '../types'
 interface SheetConfigProps {
   base1: UploadedFile
   base2: UploadedFile
-  warnings: string[]
   onConfigured: (config: ReconciliationConfig) => void
+  onBack: () => void
 }
 
 interface BaseFormState {
@@ -18,131 +18,147 @@ interface BaseFormState {
   error: string | null
 }
 
+function safeHeaders(file: UploadedFile, sheet: string): string[] {
+  try { return getSheetHeaders(file, sheet) } catch { return [] }
+}
+
 function emptyBase(file: UploadedFile): BaseFormState {
   const sheet = file.sheets[0] ?? ''
-  const headers = sheet ? getSheetHeadersSafe(file, sheet) : []
-  return {
-    sheet,
-    keyField: '',
-    valueColumn: '',
-    selectedDisplayFields: [],
-    headers,
-    error: null,
-  }
+  const headers = sheet ? safeHeaders(file, sheet) : []
+  return { sheet, keyField: '', valueColumn: '', selectedDisplayFields: [], headers, error: null }
 }
 
-function getSheetHeadersSafe(file: UploadedFile, sheet: string): string[] {
-  try {
-    return getSheetHeaders(file, sheet)
-  } catch {
-    return []
-  }
+function toBaseConfig(s: BaseFormState): BaseConfig {
+  return { sheet: s.sheet, keyField: s.keyField, valueColumn: s.valueColumn, selectedDisplayFields: s.selectedDisplayFields }
 }
 
-/**
- * Tela de configuração: seleção de aba, colunas e campos adicionais.
- * Requisitos: 2.2, 2.3, 2.4, 3.1–3.7, 6.7
- */
-export default function SheetConfig({ base1, base2, warnings, onConfigured }: SheetConfigProps) {
+export default function SheetConfig({ base1, base2, onConfigured, onBack }: SheetConfigProps) {
   const [b1, setB1] = useState<BaseFormState>(() => emptyBase(base1))
   const [b2, setB2] = useState<BaseFormState>(() => emptyBase(base2))
+  const [tolerance, setTolerance] = useState<number>(0)
 
-  // Validação de "mesma coluna para chave e valor"
-  const b1ColError = b1.keyField && b1.valueColumn && b1.keyField === b1.valueColumn
-    ? 'O campo-chave e a coluna de valor não podem ser iguais.'
-    : null
-  const b2ColError = b2.keyField && b2.valueColumn && b2.keyField === b2.valueColumn
-    ? 'O campo-chave e a coluna de valor não podem ser iguais.'
-    : null
+  const b1Error = b1.keyField && b1.valueColumn && b1.keyField === b1.valueColumn
+    ? 'O campo-chave e a coluna de valor não podem ser iguais.' : null
+  const b2Error = b2.keyField && b2.valueColumn && b2.keyField === b2.valueColumn
+    ? 'O campo-chave e a coluna de valor não podem ser iguais.' : null
 
-  const canProceed =
-    b1.sheet && b1.keyField && b1.valueColumn &&
-    b2.sheet && b2.keyField && b2.valueColumn &&
-    !b1ColError && !b2ColError
+  const canProceed = b1.sheet && b1.keyField && b1.valueColumn &&
+    b2.sheet && b2.keyField && b2.valueColumn && !b1Error && !b2Error
 
   function handleSheetChange(base: 'b1' | 'b2', sheet: string) {
     const file = base === 'b1' ? base1 : base2
-    const headers = getSheetHeadersSafe(file, sheet)
-    const setState = base === 'b1' ? setB1 : setB2
-    setState((prev) => ({
-      ...prev,
-      sheet,
-      headers,
-      keyField: '',
-      valueColumn: '',
-      selectedDisplayFields: [],
+    const headers = safeHeaders(file, sheet)
+    const set = base === 'b1' ? setB1 : setB2
+    set((p) => ({
+      ...p, sheet, headers, keyField: '', valueColumn: '', selectedDisplayFields: [],
       error: headers.length === 0 ? 'A aba selecionada não contém dados ou cabeçalhos.' : null,
     }))
   }
 
-  function handleDisplayFieldToggle(base: 'b1' | 'b2', field: string) {
-    const setState = base === 'b1' ? setB1 : setB2
-    setState((prev) => {
-      const already = prev.selectedDisplayFields.includes(field)
-      return {
-        ...prev,
-        selectedDisplayFields: already
-          ? prev.selectedDisplayFields.filter((f) => f !== field)
-          : [...prev.selectedDisplayFields, field],
-      }
-    })
+  function toggleDisplayField(base: 'b1' | 'b2', field: string) {
+    const set = base === 'b1' ? setB1 : setB2
+    set((p) => ({
+      ...p,
+      selectedDisplayFields: p.selectedDisplayFields.includes(field)
+        ? p.selectedDisplayFields.filter((f) => f !== field)
+        : [...p.selectedDisplayFields, field],
+    }))
   }
 
   function handleSubmit() {
     if (!canProceed) return
-
-    const config: ReconciliationConfig = {
+    onConfigured({
       base1: toBaseConfig(b1),
       base2: toBaseConfig(b2),
-    }
-    onConfigured(config)
+      valueTolerance: tolerance,
+    })
   }
 
   return (
     <div className="max-w-4xl mx-auto">
-      <h2 className="text-xl font-semibold text-gray-700 mb-6">Configurar Conciliação</h2>
+      {/* Título */}
+      <div className="mb-7">
+        <h2 className="text-xl font-bold text-gray-900">Configurar Conciliação</h2>
+        <p className="mt-0.5 text-sm text-gray-500">Selecione as abas, os campos-chave e as colunas de valor de cada base.</p>
+      </div>
 
-      {/* Avisos de CNPJs duplicados */}
-      {warnings.map((w, i) => (
-        <div key={i} className="mb-4 p-3 bg-yellow-50 border border-yellow-300 rounded-md text-sm text-yellow-800">
-          ⚠ {w}
-        </div>
-      ))}
-
-      <div className="grid grid-cols-2 gap-8 mb-8">
-        <BaseConfigPanel
-          label="BASE 1 (Referência)"
+      {/* Painéis das bases */}
+      <div className="grid grid-cols-2 gap-6 mb-6">
+        <BasePanel
+          label="Base 1"
+          sublabel="Referência"
+          color="blue"
           file={base1}
           state={b1}
-          colError={b1ColError}
+          colError={b1Error}
           onSheetChange={(s) => handleSheetChange('b1', s)}
           onKeyFieldChange={(v) => setB1((p) => ({ ...p, keyField: v }))}
           onValueChange={(v) => setB1((p) => ({ ...p, valueColumn: v }))}
-          onDisplayFieldToggle={(f) => handleDisplayFieldToggle('b1', f)}
+          onToggleDisplay={(f) => toggleDisplayField('b1', f)}
         />
-        <BaseConfigPanel
-          label="BASE 2 (A validar)"
+        <BasePanel
+          label="Base 2"
+          sublabel="A validar"
+          color="violet"
           file={base2}
           state={b2}
-          colError={b2ColError}
+          colError={b2Error}
           onSheetChange={(s) => handleSheetChange('b2', s)}
           onKeyFieldChange={(v) => setB2((p) => ({ ...p, keyField: v }))}
           onValueChange={(v) => setB2((p) => ({ ...p, valueColumn: v }))}
-          onDisplayFieldToggle={(f) => handleDisplayFieldToggle('b2', f)}
+          onToggleDisplay={(f) => toggleDisplayField('b2', f)}
         />
       </div>
 
-      <p className="text-xs text-gray-400 mb-4">
-        Regra de conciliação: Chave de comparação + Valor da Nota. Campos adicionais não participam da comparação.
-      </p>
+      {/* Tolerância de valor */}
+      <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-5 mb-6">
+        <div className="flex items-start gap-4">
+          <div className="w-9 h-9 rounded-lg bg-amber-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+            <svg className="w-4 h-4 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3" />
+            </svg>
+          </div>
+          <div className="flex-1">
+            <label className="block text-sm font-semibold text-gray-800 mb-0.5">Tolerância de valor</label>
+            <p className="text-xs text-gray-500 mb-3">
+              Diferença máxima aceita entre os valores para considerar "De Acordo".
+              Use <strong>0</strong> para correspondência exata.
+            </p>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-500 font-medium">R$</span>
+              <input
+                type="number"
+                min={0}
+                step={0.01}
+                value={tolerance}
+                onChange={(e) => setTolerance(Math.max(0, parseFloat(e.target.value) || 0))}
+                className="w-36 border border-gray-300 rounded-lg text-sm px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent"
+                placeholder="0,00"
+              />
+              {tolerance > 0 && (
+                <span className="text-xs text-amber-700 bg-amber-50 border border-amber-200 px-2 py-1 rounded-full">
+                  ±{tolerance.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
 
-      <div className="flex justify-end">
+      {/* Rodapé */}
+      <div className="flex items-center justify-between">
+        <button
+          onClick={onBack}
+          className="text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1 transition-colors"
+        >
+          ← Mudar arquivos
+        </button>
         <button
           disabled={!canProceed}
           onClick={handleSubmit}
-          className="px-6 py-2 bg-blue-600 text-white rounded-md font-medium
+          className="px-7 py-2.5 bg-blue-600 text-white text-sm font-semibold rounded-lg shadow-sm
             disabled:opacity-40 disabled:cursor-not-allowed
-            hover:bg-blue-700 transition-colors"
+            hover:bg-blue-700 active:bg-blue-800 transition-colors"
         >
           Conciliar →
         </button>
@@ -151,112 +167,108 @@ export default function SheetConfig({ base1, base2, warnings, onConfigured }: Sh
   )
 }
 
-// ── Painel de configuração de uma base ────────────────────────────────────────
+// ── BasePanel ─────────────────────────────────────────────────────────────────
 
-interface BaseConfigPanelProps {
+interface BasePanelProps {
   label: string
+  sublabel: string
+  color: 'blue' | 'violet'
   file: UploadedFile
   state: BaseFormState
   colError: string | null
-  onSheetChange: (sheet: string) => void
-  onKeyFieldChange: (col: string) => void
-  onValueChange: (col: string) => void
-  onDisplayFieldToggle: (field: string) => void
+  onSheetChange: (s: string) => void
+  onKeyFieldChange: (v: string) => void
+  onValueChange: (v: string) => void
+  onToggleDisplay: (f: string) => void
 }
 
-function BaseConfigPanel({
-  label, file, state, colError,
-  onSheetChange, onKeyFieldChange, onValueChange, onDisplayFieldToggle,
-}: BaseConfigPanelProps) {
-  // Colunas disponíveis para campos adicionais (excluindo chave e valor já selecionados)
+function BasePanel({
+  label, sublabel, color, file, state, colError,
+  onSheetChange, onKeyFieldChange, onValueChange, onToggleDisplay,
+}: BasePanelProps) {
+  const badge = color === 'blue' ? 'bg-blue-100 text-blue-700' : 'bg-violet-100 text-violet-700'
+  const ring = color === 'blue' ? 'focus:ring-blue-400' : 'focus:ring-violet-400'
+
   const displayHeaders = state.headers.filter(
     (h) => h !== state.keyField && h !== state.valueColumn
   )
 
   return (
-    <div>
-      <h3 className="font-semibold text-gray-600 mb-3">{label}</h3>
-      <p className="text-xs text-gray-400 mb-3">{file.name}</p>
+    <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-5">
+      {/* Header */}
+      <div className="flex items-center gap-2 mb-4">
+        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${badge}`}>{label}</span>
+        <span className="text-xs text-gray-400">{sublabel}</span>
+        <span className="text-xs text-gray-400 ml-auto truncate max-w-[120px]" title={file.name}>{file.name}</span>
+      </div>
 
       <div className="space-y-3">
-        <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">Aba</label>
+        {/* Aba */}
+        <Field label="Aba">
           <select
             value={state.sheet}
             onChange={(e) => onSheetChange(e.target.value)}
-            className="w-full border border-gray-300 rounded-md text-sm px-2 py-1.5"
+            className={`w-full border border-gray-300 rounded-lg text-sm px-3 py-1.5 focus:outline-none focus:ring-2 ${ring} focus:border-transparent`}
           >
-            {file.sheets.map((s) => (
-              <option key={s} value={s}>{s}</option>
-            ))}
+            {file.sheets.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
-          {state.error && (
-            <p className="text-xs text-red-600 mt-1">{state.error}</p>
-          )}
-        </div>
+          {state.error && <p className="text-xs text-red-600 mt-1">{state.error}</p>}
+        </Field>
 
-        <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">Campo-chave de comparação</label>
+        {/* Campo-chave */}
+        <Field label="Campo-chave de comparação">
           <select
             value={state.keyField}
             onChange={(e) => onKeyFieldChange(e.target.value)}
-            className="w-full border border-gray-300 rounded-md text-sm px-2 py-1.5"
+            className={`w-full border border-gray-300 rounded-lg text-sm px-3 py-1.5 focus:outline-none focus:ring-2 ${ring} focus:border-transparent`}
           >
             <option value="">— Selecione —</option>
-            {state.headers.map((h) => (
-              <option key={h} value={h}>{h}</option>
-            ))}
+            {state.headers.map((h) => <option key={h} value={h}>{h}</option>)}
           </select>
-        </div>
+        </Field>
 
-        <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">Coluna de Valor da Nota</label>
+        {/* Coluna de valor */}
+        <Field label="Coluna de Valor da Nota">
           <select
             value={state.valueColumn}
             onChange={(e) => onValueChange(e.target.value)}
-            className="w-full border border-gray-300 rounded-md text-sm px-2 py-1.5"
+            className={`w-full border border-gray-300 rounded-lg text-sm px-3 py-1.5 focus:outline-none focus:ring-2 ${ring} focus:border-transparent`}
           >
             <option value="">— Selecione —</option>
-            {state.headers.map((h) => (
-              <option key={h} value={h}>{h}</option>
-            ))}
+            {state.headers.map((h) => <option key={h} value={h}>{h}</option>)}
           </select>
-        </div>
+        </Field>
 
-        {colError && (
-          <p className="text-xs text-red-600">{colError}</p>
-        )}
+        {colError && <p className="text-xs text-red-600">{colError}</p>}
 
+        {/* Campos adicionais */}
         {displayHeaders.length > 0 && (
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">
-              Campos adicionais para o relatório
-            </label>
-            <div className="space-y-1 max-h-32 overflow-y-auto border border-gray-200 rounded p-2">
+          <Field label="Campos adicionais no relatório">
+            <div className="space-y-1 max-h-28 overflow-y-auto border border-gray-200 rounded-lg p-2 bg-gray-50">
               {displayHeaders.map((h) => (
-                <label key={h} className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer">
+                <label key={h} className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer select-none">
                   <input
                     type="checkbox"
                     checked={state.selectedDisplayFields.includes(h)}
-                    onChange={() => onDisplayFieldToggle(h)}
-                    className="accent-blue-600"
+                    onChange={() => onToggleDisplay(h)}
+                    className={`accent-${color === 'blue' ? 'blue' : 'violet'}-600`}
                   />
                   {h}
                 </label>
               ))}
             </div>
-          </div>
+          </Field>
         )}
       </div>
     </div>
   )
 }
 
-function toBaseConfig(state: BaseFormState): BaseConfig {
-  return {
-    sheet: state.sheet,
-    keyField: state.keyField,
-    valueColumn: state.valueColumn,
-    selectedDisplayFields: state.selectedDisplayFields,
-  }
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="block text-xs font-semibold text-gray-600 mb-1">{label}</label>
+      {children}
+    </div>
+  )
 }

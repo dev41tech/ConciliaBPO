@@ -1,14 +1,18 @@
 import { useRef, useState } from 'react'
 import { parseFile } from '../core/parser'
 import type { UploadedFile } from '../types'
+import type { HistoryEntry } from '../hooks/useFileHistory'
 
 const MAX_SIZE_MB = 20
 const MAX_SIZE_BYTES = MAX_SIZE_MB * 1024 * 1024
 const VALID_EXTENSIONS = ['.xls', '.xlsx']
 
 interface UploaderProps {
+  recentFiles: HistoryEntry[]
   onFileParsed: (base: 'base1' | 'base2', file: UploadedFile) => void
   onError: (base: 'base1' | 'base2', message: string) => void
+  onRemoveHistory: (id: string) => void
+  onNext?: () => void
 }
 
 interface FileState {
@@ -17,27 +21,18 @@ interface FileState {
   loading: boolean
 }
 
-const emptyFileState: FileState = { name: null, error: null, loading: false }
+const empty: FileState = { name: null, error: null, loading: false }
 
-/**
- * Componente de upload dos dois arquivos Excel.
- * Requisitos: 1.1, 1.2, 1.3, 1.4, 1.5
- */
-export default function Uploader({ onFileParsed, onError }: UploaderProps) {
-  const [base1State, setBase1State] = useState<FileState>(emptyFileState)
-  const [base2State, setBase2State] = useState<FileState>(emptyFileState)
+export default function Uploader({ recentFiles, onFileParsed, onError, onRemoveHistory, onNext }: UploaderProps) {
+  const [b1, setB1] = useState<FileState>(empty)
+  const [b2, setB2] = useState<FileState>(empty)
+  const ref1 = useRef<HTMLInputElement>(null) as React.RefObject<HTMLInputElement>
+  const ref2 = useRef<HTMLInputElement>(null) as React.RefObject<HTMLInputElement>
 
-  const input1Ref = useRef<HTMLInputElement>(null) as React.RefObject<HTMLInputElement>
-  const input2Ref = useRef<HTMLInputElement>(null) as React.RefObject<HTMLInputElement>
-
-  const bothOk = base1State.name !== null && base2State.name !== null &&
-    !base1State.error && !base2State.error &&
-    !base1State.loading && !base2State.loading
+  const bothOk = b1.name !== null && b2.name !== null && !b1.error && !b2.error && !b1.loading && !b2.loading
 
   async function handleFile(base: 'base1' | 'base2', file: File) {
-    const setState = base === 'base1' ? setBase1State : setBase2State
-
-    // Validação de extensão
+    const setState = base === 'base1' ? setB1 : setB2
     const ext = '.' + file.name.split('.').pop()?.toLowerCase()
     if (!VALID_EXTENSIONS.includes(ext)) {
       const msg = 'Formato inválido. Envie um arquivo .xls ou .xlsx.'
@@ -45,61 +40,123 @@ export default function Uploader({ onFileParsed, onError }: UploaderProps) {
       onError(base, msg)
       return
     }
-
-    // Validação de tamanho
     if (file.size > MAX_SIZE_BYTES) {
-      const msg = 'Arquivo muito grande. O limite é 20MB.'
+      const msg = 'Arquivo muito grande. O limite é 20 MB.'
       setState({ name: null, error: msg, loading: false })
       onError(base, msg)
       return
     }
-
     setState({ name: null, error: null, loading: true })
-
     try {
       const parsed = await parseFile(file)
       setState({ name: file.name, error: null, loading: false })
       onFileParsed(base, parsed)
     } catch (err) {
-      const msg = err instanceof Error
-        ? err.message
-        : 'Não foi possível ler o arquivo. Verifique se ele está corrompido.'
+      const msg = err instanceof Error ? err.message : 'Não foi possível ler o arquivo.'
       setState({ name: null, error: msg, loading: false })
       onError(base, msg)
     }
   }
 
-  function handleChange(base: 'base1' | 'base2', e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (file) handleFile(base, file)
+  function handleSelectRecent(base: 'base1' | 'base2', entry: HistoryEntry) {
+    const setState = base === 'base1' ? setB1 : setB2
+    setState({ name: entry.name, error: null, loading: false })
+    onFileParsed(base, { name: entry.name, sheets: entry.sheets, rawData: entry.rawData })
   }
 
   return (
-    <div className="max-w-2xl mx-auto">
-      <h2 className="text-xl font-semibold text-gray-700 mb-6">Upload das Bases Excel</h2>
+    <div className="max-w-3xl mx-auto">
+      {/* Hero */}
+      <div className="mb-8 text-center">
+        <h2 className="text-2xl font-bold text-gray-900">Conciliação de Bases</h2>
+        <p className="mt-1 text-gray-500 text-sm">
+          Faça o upload das duas planilhas Excel ou selecione um arquivo recente.
+        </p>
+      </div>
 
-      <div className="grid grid-cols-2 gap-6">
+      {/* Cards de upload */}
+      <div className="grid grid-cols-2 gap-5 mb-6">
         <FileCard
-          label="BASE 1 (Referência)"
-          state={base1State}
-          inputRef={input1Ref}
-          onChange={(e) => handleChange('base1', e)}
+          label="Base 1"
+          sublabel="Referência"
+          color="blue"
+          state={b1}
+          inputRef={ref1}
+          onPickFile={() => ref1.current?.click()}
+          onFileChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile('base1', f) }}
+          onDrop={(f) => handleFile('base1', f)}
+          onReplace={() => ref1.current?.click()}
         />
         <FileCard
-          label="BASE 2 (A validar)"
-          state={base2State}
-          inputRef={input2Ref}
-          onChange={(e) => handleChange('base2', e)}
+          label="Base 2"
+          sublabel="A validar"
+          color="violet"
+          state={b2}
+          inputRef={ref2}
+          onPickFile={() => ref2.current?.click()}
+          onFileChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile('base2', f) }}
+          onDrop={(f) => handleFile('base2', f)}
+          onReplace={() => ref2.current?.click()}
         />
       </div>
 
-      <div className="mt-8 flex justify-end">
+      {/* Histórico */}
+      {recentFiles.length > 0 && (
+        <div className="mb-8 bg-white border border-gray-200 rounded-xl shadow-sm p-4">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Arquivos recentes</p>
+          <div className="space-y-2">
+            {recentFiles.map((entry) => (
+              <div key={entry.id} className="flex items-center gap-3 p-2 rounded-lg hover:bg-gray-50 group">
+                {/* Ícone */}
+                <div className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center flex-shrink-0">
+                  <svg className="w-4 h-4 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                </div>
+                {/* Nome + data */}
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-800 truncate">{entry.name}</p>
+                  <p className="text-xs text-gray-400">
+                    {new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(entry.savedAt))}
+                    {' · '}{entry.sheets.length} aba{entry.sheets.length !== 1 ? 's' : ''}
+                  </p>
+                </div>
+                {/* Ações */}
+                <div className="flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button
+                    onClick={() => handleSelectRecent('base1', entry)}
+                    className="px-2.5 py-1 text-xs font-medium bg-blue-50 text-blue-700 rounded-md hover:bg-blue-100 transition-colors"
+                  >
+                    Base 1
+                  </button>
+                  <button
+                    onClick={() => handleSelectRecent('base2', entry)}
+                    className="px-2.5 py-1 text-xs font-medium bg-violet-50 text-violet-700 rounded-md hover:bg-violet-100 transition-colors"
+                  >
+                    Base 2
+                  </button>
+                  <button
+                    onClick={() => onRemoveHistory(entry.id)}
+                    title="Remover do histórico"
+                    className="px-2 py-1 text-xs text-gray-400 hover:text-red-500 transition-colors rounded-md hover:bg-red-50"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Botão Próximo */}
+      <div className="flex justify-end">
         <button
-          disabled={!bothOk}
-          className="px-6 py-2 bg-blue-600 text-white rounded-md font-medium
+          disabled={!bothOk || !onNext}
+          onClick={onNext}
+          className="px-7 py-2.5 bg-blue-600 text-white text-sm font-semibold rounded-lg shadow-sm
             disabled:opacity-40 disabled:cursor-not-allowed
-            hover:bg-blue-700 transition-colors"
-          onClick={() => { /* handled by parent via onFileParsed */ }}
+            hover:bg-blue-700 active:bg-blue-800 transition-colors"
         >
           Próximo →
         </button>
@@ -108,54 +165,106 @@ export default function Uploader({ onFileParsed, onError }: UploaderProps) {
   )
 }
 
+// ── FileCard ─────────────────────────────────────────────────────────────────
+
 interface FileCardProps {
   label: string
+  sublabel: string
+  color: 'blue' | 'violet'
   state: FileState
   inputRef: React.RefObject<HTMLInputElement>
-  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void
+  onPickFile: () => void
+  onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void
+  onDrop: (file: File) => void
+  onReplace: () => void
 }
 
-function FileCard({ label, state, inputRef, onChange }: FileCardProps) {
+function FileCard({ label, sublabel, color, state, inputRef, onPickFile, onFileChange, onDrop, onReplace }: FileCardProps) {
+  const [dragOver, setDragOver] = useState(false)
+
+  const accent = color === 'blue'
+    ? { ring: 'ring-blue-400 bg-blue-50', badge: 'bg-blue-100 text-blue-700', btn: 'bg-blue-600 hover:bg-blue-700' }
+    : { ring: 'ring-violet-400 bg-violet-50', badge: 'bg-violet-100 text-violet-700', btn: 'bg-violet-600 hover:bg-violet-700' }
+
+  function handleDragOver(e: React.DragEvent) {
+    e.preventDefault()
+    setDragOver(true)
+  }
+  function handleDragLeave() { setDragOver(false) }
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault()
+    setDragOver(false)
+    const file = e.dataTransfer.files?.[0]
+    if (file) onDrop(file)
+  }
+
+  const baseCard = 'rounded-xl border-2 transition-all duration-150 bg-white shadow-sm'
+  const borderClass = dragOver
+    ? `border-dashed ${color === 'blue' ? 'border-blue-400 bg-blue-50' : 'border-violet-400 bg-violet-50'}`
+    : state.error
+    ? 'border-red-300 bg-red-50'
+    : state.name
+    ? `border-${color === 'blue' ? 'blue' : 'violet'}-200`
+    : 'border-gray-200 border-dashed hover:border-gray-300'
+
   return (
-    <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center">
-      <p className="text-sm font-semibold text-gray-600 mb-3">{label}</p>
+    <div
+      className={`${baseCard} ${borderClass} p-5`}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {/* Header */}
+      <div className="flex items-center gap-2 mb-4">
+        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${accent.badge}`}>{label}</span>
+        <span className="text-xs text-gray-400">{sublabel}</span>
+      </div>
 
-      {state.loading ? (
-        <p className="text-sm text-blue-500">Lendo arquivo...</p>
-      ) : state.name ? (
-        <p className="text-sm text-green-600 font-medium">✓ {state.name}</p>
-      ) : (
-        <button
-          className="px-4 py-2 bg-white border border-gray-300 rounded-md text-sm
-            text-gray-700 hover:bg-gray-50 transition-colors"
-          onClick={() => inputRef.current?.click()}
-        >
-          Selecionar arquivo
-        </button>
-      )}
-
-      <input
-        ref={inputRef}
-        type="file"
-        accept=".xls,.xlsx"
-        className="hidden"
-        onChange={onChange}
-      />
+      {/* Conteúdo central */}
+      <div className="flex flex-col items-center text-center min-h-[100px] justify-center">
+        {state.loading ? (
+          <>
+            <div className="animate-spin rounded-full h-8 w-8 border-3 border-blue-500 border-t-transparent mb-2" />
+            <p className="text-xs text-gray-500">Lendo arquivo...</p>
+          </>
+        ) : state.name ? (
+          <>
+            <div className={`w-10 h-10 rounded-full ${color === 'blue' ? 'bg-blue-100' : 'bg-violet-100'} flex items-center justify-center mb-2`}>
+              <svg className={`w-5 h-5 ${color === 'blue' ? 'text-blue-600' : 'text-violet-600'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            <p className="text-sm font-semibold text-gray-800 max-w-full truncate px-2">{state.name}</p>
+            <button onClick={onReplace} className="mt-2 text-xs text-gray-400 underline hover:text-gray-600">
+              Trocar arquivo
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center mb-3">
+              <svg className="w-5 h-5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+              </svg>
+            </div>
+            <p className="text-xs text-gray-500 mb-3">Arraste um arquivo aqui ou</p>
+            <button
+              onClick={onPickFile}
+              className={`px-4 py-1.5 text-xs font-semibold text-white rounded-lg ${accent.btn} transition-colors`}
+            >
+              Selecionar arquivo
+            </button>
+            <p className="mt-2 text-xs text-gray-400">.xls / .xlsx · até 20 MB</p>
+          </>
+        )}
+      </div>
 
       {state.error && (
-        <p className="mt-2 text-xs text-red-600" role="alert">
+        <p className="mt-3 text-xs text-red-600 bg-red-50 rounded-lg px-2 py-1.5" role="alert">
           {state.error}
         </p>
       )}
 
-      {state.name && !state.loading && (
-        <button
-          className="mt-2 text-xs text-gray-400 underline"
-          onClick={() => inputRef.current?.click()}
-        >
-          Trocar arquivo
-        </button>
-      )}
+      <input ref={inputRef} type="file" accept=".xls,.xlsx" className="hidden" onChange={onFileChange} />
     </div>
   )
 }

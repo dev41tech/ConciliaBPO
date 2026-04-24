@@ -21,6 +21,7 @@ function makeConfig(overrides?: Partial<ReconciliationConfig>): ReconciliationCo
       valueColumn: 'VALOR',
       selectedDisplayFields: [],
     },
+    valueTolerance: 0,
     ...overrides,
   }
 }
@@ -47,12 +48,12 @@ describe('reconcile — unitários', () => {
     expect(report.records[0].valueBase1).toBe(100)
   })
 
-  it('Valor Divergente quando CNPJ existe mas valor difere', () => {
+  it('Valor Divergente quando CNPJ existe mas valor difere — mostra valor da Base_1', () => {
     const b1 = [makeRow('12345', 200)]
     const b2 = [makeRow('12345', 100)]
     const { report } = reconcile(b1, b2, makeConfig())
     expect(report.records[0].status).toBe('Valor Divergente')
-    expect(report.records[0].valueBase1).toBeNull()
+    expect(report.records[0].valueBase1).toBe(200)
   })
 
   it('Nota não encontrada quando CNPJ não existe na Base_1', () => {
@@ -295,7 +296,7 @@ describe('PBT — Property 8: completude de matching com múltiplas ocorrências
 // Feature: excel-reconciliation, Property 13: valueBase1 é preenchido corretamente conforme o status
 // ────────────────────────────────────────────────
 describe('PBT — Property 13: valueBase1 correto conforme status', () => {
-  it('valueBase1 !== null se e somente se status === De Acordo', () => {
+  it('De Acordo → valueBase1 sempre preenchido; Nota não encontrada → sempre null', () => {
     fc.assert(
       fc.property(
         fc.array(rowArb),
@@ -305,13 +306,48 @@ describe('PBT — Property 13: valueBase1 correto conforme status', () => {
           for (const rec of report.records) {
             if (rec.status === 'De Acordo') {
               expect(rec.valueBase1).not.toBeNull()
-            } else {
+            } else if (rec.status === 'Nota não encontrada') {
               expect(rec.valueBase1).toBeNull()
             }
+            // Valor Divergente: pode ter valueBase1 (1ª ocorrência disponível) ou null (todas usadas)
           }
         }
       ),
       { numRuns: 100 }
     )
+  })
+})
+
+// ────────────────────────────────────────────────
+// Testes de tolerância de valor
+// ────────────────────────────────────────────────
+describe('reconcile — tolerância de valor', () => {
+  it('dentro da tolerância → De Acordo', () => {
+    const b1 = [makeRow('12345', 100)]
+    const b2 = [makeRow('12345', 107)]
+    const { report } = reconcile(b1, b2, makeConfig({ valueTolerance: 10 }))
+    expect(report.records[0].status).toBe('De Acordo')
+  })
+
+  it('exatamente no limite da tolerância → De Acordo', () => {
+    const b1 = [makeRow('12345', 100)]
+    const b2 = [makeRow('12345', 110)]
+    const { report } = reconcile(b1, b2, makeConfig({ valueTolerance: 10 }))
+    expect(report.records[0].status).toBe('De Acordo')
+  })
+
+  it('acima da tolerância → Valor Divergente', () => {
+    const b1 = [makeRow('12345', 100)]
+    const b2 = [makeRow('12345', 115)]
+    const { report } = reconcile(b1, b2, makeConfig({ valueTolerance: 10 }))
+    expect(report.records[0].status).toBe('Valor Divergente')
+    expect(report.records[0].valueBase1).toBe(100)
+  })
+
+  it('tolerância 0 exige correspondência exata', () => {
+    const b1 = [makeRow('X', 100)]
+    const b2 = [makeRow('X', 100.01)]
+    const { report } = reconcile(b1, b2, makeConfig({ valueTolerance: 0 }))
+    expect(report.records[0].status).toBe('Valor Divergente')
   })
 })

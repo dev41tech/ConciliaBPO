@@ -2,7 +2,9 @@ import { useReducer } from 'react'
 import Uploader from './components/Uploader'
 import SheetConfig from './components/SheetConfig'
 import ReportTable from './components/ReportTable'
+import Stepper from './components/Stepper'
 import { reconcile } from './core/reconciliationEngine'
+import { useFileHistory } from './hooks/useFileHistory'
 import type {
   AppState,
   UploadedFile,
@@ -10,11 +12,11 @@ import type {
   ReconciliationReport,
 } from './types'
 
-// ── Actions ──────────────────────────────────────────────────────────────────
 type Action =
   | { type: 'SET_BASE'; base: 'base1' | 'base2'; file: UploadedFile }
   | { type: 'SET_ERROR'; key: string; message: string }
   | { type: 'GO_CONFIG' }
+  | { type: 'BACK_TO_CONFIG' }
   | { type: 'SET_REPORT'; report: ReconciliationReport; warnings: string[] }
   | { type: 'RESET' }
 
@@ -36,13 +38,10 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, errors: { ...state.errors, [action.key]: action.message } }
     case 'GO_CONFIG':
       return { ...state, step: 'config' }
+    case 'BACK_TO_CONFIG':
+      return { ...state, step: 'config', config: null, report: null, warnings: [] }
     case 'SET_REPORT':
-      return {
-        ...state,
-        step: 'report',
-        report: action.report,
-        warnings: action.warnings,
-      }
+      return { ...state, step: 'report', report: action.report, warnings: action.warnings }
     case 'RESET':
       return initialState
     default:
@@ -50,14 +49,15 @@ function reducer(state: AppState, action: Action): AppState {
   }
 }
 
-// ── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState)
+  const { entries, addEntry, removeEntry } = useFileHistory()
 
   const bothBasesParsed = state.base1 !== null && state.base2 !== null
 
   function handleFileParsed(base: 'base1' | 'base2', file: UploadedFile) {
     dispatch({ type: 'SET_BASE', base, file })
+    addEntry(file)
   }
 
   function handleFileError(base: 'base1' | 'base2', message: string) {
@@ -67,38 +67,38 @@ export default function App() {
   function handleConfigured(config: ReconciliationConfig) {
     const base1Rows = state.base1!.rawData[config.base1.sheet] ?? []
     const base2Rows = state.base2!.rawData[config.base2.sheet] ?? []
-
     const { report, warnings } = reconcile(base1Rows, base2Rows, config)
     dispatch({ type: 'SET_REPORT', report, warnings })
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header — iframe-friendly: sem links externos ou navegação */}
-      <header className="bg-white border-b border-gray-200 px-6 py-4">
-        <h1 className="text-lg font-bold text-gray-800">Conciliação de Bases Excel</h1>
+    <div className="min-h-screen bg-slate-50">
+      {/* Header */}
+      <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center gap-3 shadow-sm">
+        <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center flex-shrink-0">
+          <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 17v-6a2 2 0 012-2h2a2 2 0 012 2v6m-8 0H5a2 2 0 01-2-2V7a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-2" />
+          </svg>
+        </div>
+        <div>
+          <h1 className="text-sm font-bold text-gray-900 leading-tight">Conciliador BPO</h1>
+          <p className="text-xs text-gray-400">Conciliação de Bases Excel</p>
+        </div>
       </header>
 
-      <main className="px-6 py-8">
+      <main className="max-w-5xl mx-auto px-6 py-10">
+        {/* Stepper: aparece em todas as etapas exceto upload */}
+        {state.step !== 'upload' && <Stepper step={state.step} />}
+
         {/* Passo 1: Upload */}
         {state.step === 'upload' && (
-          <div>
-            <Uploader
-              onFileParsed={handleFileParsed}
-              onError={handleFileError}
-            />
-            {bothBasesParsed && (
-              <div className="max-w-2xl mx-auto mt-6 flex justify-end">
-                <button
-                  onClick={() => dispatch({ type: 'GO_CONFIG' })}
-                  className="px-6 py-2 bg-blue-600 text-white rounded-md font-medium
-                    hover:bg-blue-700 transition-colors"
-                >
-                  Próximo →
-                </button>
-              </div>
-            )}
-          </div>
+          <Uploader
+            recentFiles={entries}
+            onFileParsed={handleFileParsed}
+            onError={handleFileError}
+            onRemoveHistory={removeEntry}
+            onNext={bothBasesParsed ? () => dispatch({ type: 'GO_CONFIG' }) : undefined}
+          />
         )}
 
         {/* Passo 2: Configuração */}
@@ -106,17 +106,17 @@ export default function App() {
           <SheetConfig
             base1={state.base1}
             base2={state.base2}
-            warnings={state.warnings}
             onConfigured={handleConfigured}
+            onBack={() => dispatch({ type: 'RESET' })}
           />
         )}
 
-        {/* Passo 3: Processando (spinner — reconcile é síncrono no MVP) */}
+        {/* Passo 3: Processando */}
         {state.step === 'processing' && (
-          <div className="flex items-center justify-center py-16">
+          <div className="flex items-center justify-center py-24">
             <div className="text-center">
-              <div className="animate-spin rounded-full h-10 w-10 border-4 border-blue-600 border-t-transparent mx-auto mb-3" />
-              <p className="text-gray-600">Processando conciliação...</p>
+              <div className="animate-spin rounded-full h-12 w-12 border-4 border-blue-600 border-t-transparent mx-auto mb-4" />
+              <p className="text-gray-600 font-medium">Processando conciliação...</p>
             </div>
           </div>
         )}
@@ -125,6 +125,8 @@ export default function App() {
         {state.step === 'report' && state.report && (
           <ReportTable
             report={state.report}
+            warnings={state.warnings}
+            onNewConfig={() => dispatch({ type: 'BACK_TO_CONFIG' })}
             onReset={() => dispatch({ type: 'RESET' })}
           />
         )}
