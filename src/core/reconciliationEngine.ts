@@ -14,15 +14,14 @@ export interface ReconcileResult {
 /**
  * Executa a conciliação entre Base_1 e Base_2.
  *
- * Algoritmo:
- * 1. Indexar Base_1 pela chave normalizada
- * 2. Para cada registro da Base_2:
- *    a. Se chave vazia → "Nota não encontrada" (aviso acumulado)
- *    b. Se chave não existe na Base_1 → "Nota não encontrada"
- *    c. Buscar ocorrência não-usada com |valor1 - valor2| <= valueTolerance
- *    d. Se encontrada → "De Acordo" + marcar como usada
- *    e. Se não encontrada → "Valor Divergente" (mostra valor da 1ª ocorrência disponível)
- * 3. Avisos: chaves duplicadas em ambas as bases, chaves vazias na Base_2
+ * Modelo: aggregate-first (agrupa por chave antes de comparar)
+ * 1. Agrupar Base_1 por chave normalizada, somando os valores de cada grupo
+ * 2. Agrupar Base_2 por chave normalizada, somando os valores de cada grupo
+ * 3. Para cada chave única da Base_2:
+ *    a. Se não existe na Base_1 → "Nota não encontrada"
+ *    b. Se |totalBase1 - totalBase2| <= valueTolerance → "De Acordo"
+ *    c. Caso contrário → "Valor Divergente" (exibe ambos os totais)
+ * 4. Linhas com campo-chave vazio são ignoradas e geram aviso
  */
 export function reconcile(
   base1Rows: Row[],
@@ -32,50 +31,55 @@ export function reconcile(
   const warnings: string[] = []
   const tolerance = config.valueTolerance ?? 0
 
-  // ── 1. Construir índice da Base_1 ─────────────────────────────────────
-  const base1Index = new Map<string, Row[]>()
+  // ── Tipo auxiliar para o agregado de cada chave ───────────────────────
+  interface Aggregate {
+    total: number
+    firstRow: Row  // para os campos de exibição adicionais
+  }
+
+  // ── 1. Agregar Base_1 por chave ───────────────────────────────────────
+  const base1: Map<string, Aggregate> = new Map()
+  let emptyBase1 = 0
+
   for (const row of base1Rows) {
-    const keyRaw = row[config.base1.keyField]
-    if (keyRaw === null || keyRaw === undefined || keyRaw === '') continue
-    const keyNorm = normalizeKey(keyRaw)
-    if (!keyNorm) continue
-    if (!base1Index.has(keyNorm)) base1Index.set(keyNorm, [])
-    base1Index.get(keyNorm)!.push(row)
+    const keyNorm = normalizeKey(row[config.base1.keyField])
+    if (!keyNorm) { emptyBase1++; continue }
+
+    const v = normalizeValue(row[config.base1.valueColumn]) ?? 0
+    const existing = base1.get(keyNorm)
+    if (existing) {
+      existing.total += v
+    } else {
+      base1.set(keyNorm, { total: v, firstRow: row })
+    }
   }
 
-  // ── Detectar chaves duplicadas na Base_1 ──────────────────────────────
-  const dupBase1: string[] = []
-  for (const [key, rows] of base1Index.entries()) {
-    if (rows.length > 1) dupBase1.push(key)
-  }
-  if (dupBase1.length > 0) {
-    warnings.push(
-      `Chaves duplicadas na Base_1 detectadas (${dupBase1.length} chave(s)). ` +
-      `O sistema usará anti-double-matching para evitar correspondências duplicadas.`
-    )
-  }
+  // ── 2. Agregar Base_2 por chave ───────────────────────────────────────
+  const base2: Map<string, Aggregate> = new Map()
+  let emptyBase2 = 0
 
-  // ── Detectar chaves duplicadas na Base_2 ──────────────────────────────
-  const base2KeyCount = new Map<string, number>()
   for (const row of base2Rows) {
-    const kn = normalizeKey(row[config.base2.keyField])
-    if (kn) base2KeyCount.set(kn, (base2KeyCount.get(kn) ?? 0) + 1)
-  }
-  const dupBase2: string[] = []
-  for (const [key, count] of base2KeyCount.entries()) {
-    if (count > 1) dupBase2.push(key)
-  }
-  if (dupBase2.length > 0) {
-    warnings.push(
-      `Chaves duplicadas na Base_2 detectadas (${dupBase2.length} chave(s)). ` +
-      `Cada linha é processada de forma independente.`
-    )
+    const keyNorm = normalizeKey(row[config.base2.keyField])
+    if (!keyNorm) { emptyBase2++; continue }
+
+    const v = normalizeValue(row[config.base2.valueColumn]) ?? 0
+    const existing = base2.get(keyNorm)
+    if (existing) {
+      existing.total += v
+    } else {
+      base2.set(keyNorm, { total: v, firstRow: row })
+    }
   }
 
-  // ── 2. Anti-double-matching: rastrear índices usados por chave ────────
-  const usedIndices = new Map<string, Set<number>>()
+  // Avisos de chaves vazias
+  if (emptyBase1 > 0) {
+    warnings.push(`${emptyBase1} linha(s) da Base_1 com campo-chave vazio foram ignoradas.`)
+  }
+  if (emptyBase2 > 0) {
+    warnings.push(`${emptyBase2} linha(s) da Base_2 com campo-chave vazio foram ignoradas.`)
+  }
 
-  // ── 3. Colunas visíveis (visibleColumns[0] = nome do campo-chave da Base_2) ──
+  // ── 3. Colunas visíveis ───────────────────────────────────────────────
   const visibleColumns: string[] = [
     config.base2.keyField,
     'Valor da Nota (Base_2)',
@@ -85,92 +89,64 @@ export function reconcile(
     ...config.base1.selectedDisplayFields.map((f) => `base1:${f}`),
   ]
 
-  // ── 4. Processar cada registro da Base_2 ─────────────────────────────
+  // ── 4. Comparar totais ────────────────────────────────────────────────
   const records: ReconciliationRecord[] = []
-  let deAcordo = 0
-  let divergente = 0
-  let naoEncontrada = 0
-  let emptyKeyCount = 0
+  let deAcordo = 0, divergente = 0, naoEncontrada = 0
 
-  for (const row2 of base2Rows) {
-    const keyRaw2 = row2[config.base2.keyField]
-    const keyNorm2 = normalizeKey(keyRaw2)
-    const valueNorm2 = normalizeValue(row2[config.base2.valueColumn])
+  for (const [keyNorm, agg2] of base2.entries()) {
+    // Arredondar total acumulado para evitar erros de ponto flutuante
+    const total2 = parseFloat(agg2.total.toFixed(2))
 
+    // Campos de exibição da Base_2 (primeira linha do grupo)
     const displayFields: Record<string, string | number | null> = {}
     for (const field of config.base2.selectedDisplayFields) {
-      displayFields[`base2:${field}`] = row2[field] ?? null
+      displayFields[`base2:${field}`] = agg2.firstRow[field] ?? null
     }
 
-    // Caso: chave vazia na Base_2
-    if (!keyNorm2) {
-      emptyKeyCount++
+    const agg1 = base1.get(keyNorm)
+
+    if (!agg1) {
+      // Chave não existe na Base_1
       for (const field of config.base1.selectedDisplayFields) {
         displayFields[`base1:${field}`] = null
       }
-      records.push({ keyValue: String(keyRaw2 ?? ''), valueBase2: valueNorm2, valueBase1: null, status: 'Nota não encontrada', displayFields })
+      records.push({
+        keyValue: keyNorm,
+        valueBase2: total2,
+        valueBase1: null,
+        status: 'Nota não encontrada',
+        displayFields,
+      })
       naoEncontrada++
       continue
     }
 
-    const base1Occurrences = base1Index.get(keyNorm2)
+    const total1 = parseFloat(agg1.total.toFixed(2))
 
-    // Caso: chave não existe na Base_1
-    if (!base1Occurrences || base1Occurrences.length === 0) {
-      for (const field of config.base1.selectedDisplayFields) {
-        displayFields[`base1:${field}`] = null
-      }
-      records.push({ keyValue: keyNorm2, valueBase2: valueNorm2, valueBase1: null, status: 'Nota não encontrada', displayFields })
-      naoEncontrada++
-      continue
+    // Campos de exibição da Base_1 (primeira linha do grupo)
+    for (const field of config.base1.selectedDisplayFields) {
+      displayFields[`base1:${field}`] = agg1.firstRow[field] ?? null
     }
 
-    if (!usedIndices.has(keyNorm2)) usedIndices.set(keyNorm2, new Set())
-    const used = usedIndices.get(keyNorm2)!
-
-    // Buscar ocorrência não usada cuja diferença de valor esteja dentro da tolerância
-    let matchedRow: Row | null = null
-    let matchedIdx = -1
-    for (let i = 0; i < base1Occurrences.length; i++) {
-      if (used.has(i)) continue
-      const v1 = normalizeValue(base1Occurrences[i][config.base1.valueColumn])
-      if (v1 !== null && valueNorm2 !== null && Math.abs(v1 - valueNorm2) <= tolerance) {
-        matchedRow = base1Occurrences[i]
-        matchedIdx = i
-        break
-      }
-    }
-
-    if (matchedRow !== null) {
-      // De Acordo
-      used.add(matchedIdx)
-      const valueBase1 = normalizeValue(matchedRow[config.base1.valueColumn])
-      for (const field of config.base1.selectedDisplayFields) {
-        displayFields[`base1:${field}`] = matchedRow[field] ?? null
-      }
-      records.push({ keyValue: keyNorm2, valueBase2: valueNorm2, valueBase1, status: 'De Acordo', displayFields })
+    if (Math.abs(total1 - total2) <= tolerance) {
+      records.push({
+        keyValue: keyNorm,
+        valueBase2: total2,
+        valueBase1: total1,
+        status: 'De Acordo',
+        displayFields,
+      })
       deAcordo++
     } else {
-      // Valor Divergente — mostrar valor/campos da 1ª ocorrência disponível da Base_1
-      let firstAvailable: Row | null = null
-      for (let i = 0; i < base1Occurrences.length; i++) {
-        if (!used.has(i)) { firstAvailable = base1Occurrences[i]; break }
-      }
-      const valueBase1 = firstAvailable
-        ? normalizeValue(firstAvailable[config.base1.valueColumn])
-        : null
-      for (const field of config.base1.selectedDisplayFields) {
-        displayFields[`base1:${field}`] = firstAvailable ? (firstAvailable[field] ?? null) : null
-      }
-      records.push({ keyValue: keyNorm2, valueBase2: valueNorm2, valueBase1, status: 'Valor Divergente', displayFields })
+      records.push({
+        keyValue: keyNorm,
+        valueBase2: total2,
+        valueBase1: total1,
+        status: 'Valor Divergente',
+        displayFields,
+      })
       divergente++
     }
-  }
-
-  if (emptyKeyCount > 0) {
-    warnings.push(
-      `${emptyKeyCount} linha(s) da Base_2 com campo-chave vazio foram tratadas como "Nota não encontrada".`
-    )
   }
 
   return {
