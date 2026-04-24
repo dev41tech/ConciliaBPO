@@ -11,7 +11,7 @@ export interface UploadedFile {
 // Configuração por base
 export interface BaseConfig {
   sheet: string;
-  cnpjColumn: string;
+  keyField: string;
   valueColumn: string;
   selectedDisplayFields: string[];
 }
@@ -30,7 +30,7 @@ export type ReconciliationStatus =
 
 // Registro individual no relatório
 export interface ReconciliationRecord {
-  cnpj: string;
+  keyValue: string;
   valueBase2: number | null;
   /**
    * Valor da Nota da Base_1 para este registro.

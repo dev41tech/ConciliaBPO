@@ -11,7 +11,7 @@ interface SheetConfigProps {
 
 interface BaseFormState {
   sheet: string
-  cnpjColumn: string
+  keyField: string
   valueColumn: string
   selectedDisplayFields: string[]
   headers: string[]
@@ -23,7 +23,7 @@ function emptyBase(file: UploadedFile): BaseFormState {
   const headers = sheet ? getSheetHeadersSafe(file, sheet) : []
   return {
     sheet,
-    cnpjColumn: '',
+    keyField: '',
     valueColumn: '',
     selectedDisplayFields: [],
     headers,
@@ -47,17 +47,17 @@ export default function SheetConfig({ base1, base2, warnings, onConfigured }: Sh
   const [b1, setB1] = useState<BaseFormState>(() => emptyBase(base1))
   const [b2, setB2] = useState<BaseFormState>(() => emptyBase(base2))
 
-  // Validação de "mesma coluna para CNPJ e Valor"
-  const b1ColError = b1.cnpjColumn && b1.valueColumn && b1.cnpjColumn === b1.valueColumn
-    ? 'A coluna de CNPJ e a coluna de valor não podem ser iguais.'
+  // Validação de "mesma coluna para chave e valor"
+  const b1ColError = b1.keyField && b1.valueColumn && b1.keyField === b1.valueColumn
+    ? 'O campo-chave e a coluna de valor não podem ser iguais.'
     : null
-  const b2ColError = b2.cnpjColumn && b2.valueColumn && b2.cnpjColumn === b2.valueColumn
-    ? 'A coluna de CNPJ e a coluna de valor não podem ser iguais.'
+  const b2ColError = b2.keyField && b2.valueColumn && b2.keyField === b2.valueColumn
+    ? 'O campo-chave e a coluna de valor não podem ser iguais.'
     : null
 
   const canProceed =
-    b1.sheet && b1.cnpjColumn && b1.valueColumn &&
-    b2.sheet && b2.cnpjColumn && b2.valueColumn &&
+    b1.sheet && b1.keyField && b1.valueColumn &&
+    b2.sheet && b2.keyField && b2.valueColumn &&
     !b1ColError && !b2ColError
 
   function handleSheetChange(base: 'b1' | 'b2', sheet: string) {
@@ -68,7 +68,7 @@ export default function SheetConfig({ base1, base2, warnings, onConfigured }: Sh
       ...prev,
       sheet,
       headers,
-      cnpjColumn: '',
+      keyField: '',
       valueColumn: '',
       selectedDisplayFields: [],
       error: headers.length === 0 ? 'A aba selecionada não contém dados ou cabeçalhos.' : null,
@@ -116,7 +116,7 @@ export default function SheetConfig({ base1, base2, warnings, onConfigured }: Sh
           state={b1}
           colError={b1ColError}
           onSheetChange={(s) => handleSheetChange('b1', s)}
-          onCnpjChange={(v) => setB1((p) => ({ ...p, cnpjColumn: v }))}
+          onKeyFieldChange={(v) => setB1((p) => ({ ...p, keyField: v }))}
           onValueChange={(v) => setB1((p) => ({ ...p, valueColumn: v }))}
           onDisplayFieldToggle={(f) => handleDisplayFieldToggle('b1', f)}
         />
@@ -126,14 +126,14 @@ export default function SheetConfig({ base1, base2, warnings, onConfigured }: Sh
           state={b2}
           colError={b2ColError}
           onSheetChange={(s) => handleSheetChange('b2', s)}
-          onCnpjChange={(v) => setB2((p) => ({ ...p, cnpjColumn: v }))}
+          onKeyFieldChange={(v) => setB2((p) => ({ ...p, keyField: v }))}
           onValueChange={(v) => setB2((p) => ({ ...p, valueColumn: v }))}
           onDisplayFieldToggle={(f) => handleDisplayFieldToggle('b2', f)}
         />
       </div>
 
       <p className="text-xs text-gray-400 mb-4">
-        Regra de conciliação do MVP: CNPJ + Valor da Nota. Campos adicionais não participam da comparação.
+        Regra de conciliação: Chave de comparação + Valor da Nota. Campos adicionais não participam da comparação.
       </p>
 
       <div className="flex justify-end">
@@ -159,18 +159,18 @@ interface BaseConfigPanelProps {
   state: BaseFormState
   colError: string | null
   onSheetChange: (sheet: string) => void
-  onCnpjChange: (col: string) => void
+  onKeyFieldChange: (col: string) => void
   onValueChange: (col: string) => void
   onDisplayFieldToggle: (field: string) => void
 }
 
 function BaseConfigPanel({
   label, file, state, colError,
-  onSheetChange, onCnpjChange, onValueChange, onDisplayFieldToggle,
+  onSheetChange, onKeyFieldChange, onValueChange, onDisplayFieldToggle,
 }: BaseConfigPanelProps) {
-  // Colunas disponíveis para campos adicionais (excluindo CNPJ e Valor já selecionados)
+  // Colunas disponíveis para campos adicionais (excluindo chave e valor já selecionados)
   const displayHeaders = state.headers.filter(
-    (h) => h !== state.cnpjColumn && h !== state.valueColumn
+    (h) => h !== state.keyField && h !== state.valueColumn
   )
 
   return (
@@ -196,10 +196,10 @@ function BaseConfigPanel({
         </div>
 
         <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">Coluna de CNPJ</label>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Campo-chave de comparação</label>
           <select
-            value={state.cnpjColumn}
-            onChange={(e) => onCnpjChange(e.target.value)}
+            value={state.keyField}
+            onChange={(e) => onKeyFieldChange(e.target.value)}
             className="w-full border border-gray-300 rounded-md text-sm px-2 py-1.5"
           >
             <option value="">— Selecione —</option>
@@ -255,7 +255,7 @@ function BaseConfigPanel({
 function toBaseConfig(state: BaseFormState): BaseConfig {
   return {
     sheet: state.sheet,
-    cnpjColumn: state.cnpjColumn,
+    keyField: state.keyField,
     valueColumn: state.valueColumn,
     selectedDisplayFields: state.selectedDisplayFields,
   }

@@ -38,7 +38,7 @@ export function buildWorksheet(report: ReconciliationReport): XLSX.WorkSheet {
   // ── Linhas de dados ─────────────────────────────────────────────────────
   const rows: (string | number | null)[][] = report.records.map((rec) => {
     const row: (string | number | null)[] = [
-      rec.cnpj,
+      rec.keyValue,
       rec.valueBase2,
       rec.valueBase1,   // null será exibido como vazio; UI mostra "—"
       rec.status,
@@ -62,8 +62,8 @@ export function buildWorksheet(report: ReconciliationReport): XLSX.WorkSheet {
 }
 
 function buildHeaders(visibleColumns: string[]): string[] {
-  // As 4 primeiras colunas têm labels fixos; o resto vem de visibleColumns[4+]
-  const fixed = ['CNPJ', 'Valor da Nota (Base_2)', 'Valor da Nota (Base_1)', 'Status']
+  // A 1ª coluna usa o nome do campo-chave (visibleColumns[0]); as demais têm labels fixos
+  const fixed = [visibleColumns[0] ?? 'Chave', 'Valor da Nota (Base_2)', 'Valor da Nota (Base_1)', 'Status']
   const extra = visibleColumns.slice(4).map((col) => {
     // "base1:NomeColuna" → "NomeColuna (Base_1)"
     if (col.startsWith('base1:')) return `${col.slice(6)} (Base_1)`

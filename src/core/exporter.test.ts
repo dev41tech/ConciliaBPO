@@ -24,12 +24,12 @@ function makeReport(records: ReconciliationRecord[]): ReconciliationReport {
 }
 
 function makeRecord(
-  cnpj: string,
+  keyValue: string,
   valueBase2: number | null,
   valueBase1: number | null,
   status: ReconciliationStatus
 ): ReconciliationRecord {
-  return { cnpj, valueBase2, valueBase1, status, displayFields: {} }
+  return { keyValue, valueBase2, valueBase1, status, displayFields: {} }
 }
 
 // Gerador de ReconciliationRecord arbitrário
@@ -40,7 +40,7 @@ const statusArb = fc.constantFrom<ReconciliationStatus>(
 )
 
 const recordArb = fc.record({
-  cnpj: fc.string({ maxLength: 20 }),
+  keyValue: fc.string({ maxLength: 20 }),
   valueBase2: fc.oneof(fc.float({ noNaN: true, noDefaultInfinity: true, min: -1e9, max: 1e9 }), fc.constant(null)),
   valueBase1: fc.oneof(fc.float({ noNaN: true, noDefaultInfinity: true, min: -1e9, max: 1e9 }), fc.constant(null)),
   status: statusArb,

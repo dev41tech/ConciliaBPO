@@ -91,7 +91,7 @@ export default function ReportTable({ report, onReset }: ReportTableProps) {
           <table className="min-w-full text-sm">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
-                <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">CNPJ</th>
+                <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">{report.visibleColumns[0]}</th>
                 <th className="px-3 py-2 text-right text-xs font-semibold text-gray-600">Valor (Base_2)</th>
                 <th className="px-3 py-2 text-right text-xs font-semibold text-gray-600">Valor (Base_1)</th>
                 <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Status</th>
@@ -105,7 +105,7 @@ export default function ReportTable({ report, onReset }: ReportTableProps) {
             <tbody className="divide-y divide-gray-100">
               {paginated.map((rec, i) => (
                 <tr key={i} className={ROW_BG[rec.status]}>
-                  <td className="px-3 py-2 font-mono text-xs">{rec.cnpj || '—'}</td>
+                  <td className="px-3 py-2 font-mono text-xs">{rec.keyValue || '—'}</td>
                   <td className="px-3 py-2 text-right">{formatValue(rec.valueBase2)}</td>
                   <td className="px-3 py-2 text-right">{formatValue(rec.valueBase1)}</td>
                   <td className="px-3 py-2">

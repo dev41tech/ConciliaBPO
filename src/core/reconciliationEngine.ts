@@ -19,17 +19,15 @@ export interface ReconcileResult {
  * Executa a conciliação entre Base_1 e Base_2.
  *
  * Algoritmo:
- * 1. Indexar Base_1 por CNPJ normalizado (Map<cnpj, Row[]>)
+ * 1. Indexar Base_1 pela chave normalizada (Map<chave, Row[]>)
  * 2. Para cada registro da Base_2:
- *    a. Normalizar CNPJ
- *    b. Se CNPJ vazio → "Nota não encontrada"
- *    c. Se CNPJ não existe na Base_1 → "Nota não encontrada"
+ *    a. Normalizar chave
+ *    b. Se chave vazia → "Nota não encontrada" (aviso acumulado)
+ *    c. Se chave não existe na Base_1 → "Nota não encontrada"
  *    d. Buscar ocorrência não-usada na Base_1 com mesmo valor normalizado
  *    e. Se encontrada → "De Acordo" + marcar como usada
  *    f. Se não encontrada → "Valor Divergente"
- * 3. Detectar CNPJs duplicados na Base_1 e emitir aviso
- *
- * Requisitos: 5.1–5.5, 6.1–6.7, 7.1–7.5
+ * 3. Detectar chaves duplicadas na Base_1 e na Base_2 e emitir avisos
  */
 export function reconcile(
   base1Rows: Row[],
@@ -39,43 +37,63 @@ export function reconcile(
   const warnings: string[] = []
 
   // ── 1. Construir índice da Base_1 ──────────────────────────────────────
-  // Map<cnpjNorm, Row[]> — múltiplas ocorrências por CNPJ são permitidas
+  // Map<keyNorm, Row[]> — múltiplas ocorrências por chave são permitidas
   const base1Index = new Map<string, Row[]>()
 
   for (const row of base1Rows) {
-    const cnpjRaw = row[config.base1.cnpjColumn]
-    if (cnpjRaw === null || cnpjRaw === undefined || cnpjRaw === '') continue
+    const keyRaw = row[config.base1.keyField]
+    if (keyRaw === null || keyRaw === undefined || keyRaw === '') continue
 
-    const cnpjNorm = normalizeKey(cnpjRaw)
-    if (!cnpjNorm) continue
+    const keyNorm = normalizeKey(keyRaw)
+    if (!keyNorm) continue
 
-    if (!base1Index.has(cnpjNorm)) {
-      base1Index.set(cnpjNorm, [])
+    if (!base1Index.has(keyNorm)) {
+      base1Index.set(keyNorm, [])
     }
-    base1Index.get(cnpjNorm)!.push(row)
+    base1Index.get(keyNorm)!.push(row)
   }
 
-  // ── Detectar CNPJs duplicados na Base_1 (aviso, sem bloqueio) ──────────
-  const duplicatedCnpjs: string[] = []
-  for (const [cnpj, rows] of base1Index.entries()) {
+  // ── Detectar chaves duplicadas na Base_1 (aviso, sem bloqueio) ──────────
+  const duplicatedBase1Keys: string[] = []
+  for (const [key, rows] of base1Index.entries()) {
     if (rows.length > 1) {
-      duplicatedCnpjs.push(cnpj)
+      duplicatedBase1Keys.push(key)
     }
   }
-  if (duplicatedCnpjs.length > 0) {
+  if (duplicatedBase1Keys.length > 0) {
     warnings.push(
-      `CNPJs duplicados na Base_1 detectados (${duplicatedCnpjs.length} CNPJ(s)). ` +
+      `Chaves duplicadas na Base_1 detectadas (${duplicatedBase1Keys.length} chave(s)). ` +
       `O sistema usará anti-double-matching para evitar correspondências duplicadas.`
     )
   }
 
+  // ── Detectar chaves duplicadas na Base_2 (aviso, sem bloqueio) ──────────
+  const base2KeyCount = new Map<string, number>()
+  for (const row of base2Rows) {
+    const keyNorm = normalizeKey(row[config.base2.keyField])
+    if (keyNorm) {
+      base2KeyCount.set(keyNorm, (base2KeyCount.get(keyNorm) ?? 0) + 1)
+    }
+  }
+  const duplicatedBase2Keys: string[] = []
+  for (const [key, count] of base2KeyCount.entries()) {
+    if (count > 1) duplicatedBase2Keys.push(key)
+  }
+  if (duplicatedBase2Keys.length > 0) {
+    warnings.push(
+      `Chaves duplicadas na Base_2 detectadas (${duplicatedBase2Keys.length} chave(s)). ` +
+      `Cada linha é processada de forma independente.`
+    )
+  }
+
   // ── 2. Controle de anti-double-matching ────────────────────────────────
-  // Para cada CNPJ, rastreamos quais índices de Row já foram usados
+  // Para cada chave, rastreamos quais índices de Row já foram usados
   const usedIndices = new Map<string, Set<number>>()
 
   // ── 3. Construir visibleColumns ────────────────────────────────────────
+  // A primeira coluna usa o nome do campo-chave da Base_2 como cabeçalho
   const visibleColumns: string[] = [
-    'CNPJ',
+    config.base2.keyField,
     'Valor da Nota (Base_2)',
     'Valor da Nota (Base_1)',
     'Status',
@@ -89,10 +107,11 @@ export function reconcile(
   let deAcordo = 0
   let divergente = 0
   let naoEncontrada = 0
+  let emptyKeyCount = 0
 
   for (const row2 of base2Rows) {
-    const cnpjRaw2 = row2[config.base2.cnpjColumn]
-    const cnpjNorm2 = normalizeKey(cnpjRaw2)
+    const keyRaw2 = row2[config.base2.keyField]
+    const keyNorm2 = normalizeKey(keyRaw2)
     const valueNorm2 = normalizeValue(row2[config.base2.valueColumn])
 
     // Coletar campos adicionais da Base_2
@@ -101,14 +120,14 @@ export function reconcile(
       displayFields[`base2:${field}`] = row2[field] ?? null
     }
 
-    // Caso: CNPJ vazio na Base_2
-    if (!cnpjNorm2) {
-      // Campos adicionais da Base_1: não há match, preencher null
+    // Caso: chave vazia na Base_2
+    if (!keyNorm2) {
+      emptyKeyCount++
       for (const field of config.base1.selectedDisplayFields) {
         displayFields[`base1:${field}`] = null
       }
       records.push({
-        cnpj: String(cnpjRaw2 ?? ''),
+        keyValue: String(keyRaw2 ?? ''),
         valueBase2: valueNorm2,
         valueBase1: null,
         status: 'Nota não encontrada',
@@ -118,16 +137,16 @@ export function reconcile(
       continue
     }
 
-    // Buscar ocorrências da Base_1 para esse CNPJ
-    const base1Occurrences = base1Index.get(cnpjNorm2)
+    // Buscar ocorrências da Base_1 para essa chave
+    const base1Occurrences = base1Index.get(keyNorm2)
 
-    // Caso: CNPJ não existe na Base_1
+    // Caso: chave não existe na Base_1
     if (!base1Occurrences || base1Occurrences.length === 0) {
       for (const field of config.base1.selectedDisplayFields) {
         displayFields[`base1:${field}`] = null
       }
       records.push({
-        cnpj: cnpjNorm2,
+        keyValue: keyNorm2,
         valueBase2: valueNorm2,
         valueBase1: null,
         status: 'Nota não encontrada',
@@ -137,11 +156,11 @@ export function reconcile(
       continue
     }
 
-    // Garantir rastreador de índices usados para este CNPJ
-    if (!usedIndices.has(cnpjNorm2)) {
-      usedIndices.set(cnpjNorm2, new Set())
+    // Garantir rastreador de índices usados para esta chave
+    if (!usedIndices.has(keyNorm2)) {
+      usedIndices.set(keyNorm2, new Set())
     }
-    const used = usedIndices.get(cnpjNorm2)!
+    const used = usedIndices.get(keyNorm2)!
 
     // Buscar ocorrência não usada com mesmo valor normalizado
     let matchedRow: Row | null = null
@@ -170,7 +189,7 @@ export function reconcile(
       }
 
       records.push({
-        cnpj: cnpjNorm2,
+        keyValue: keyNorm2,
         valueBase2: valueNorm2,
         valueBase1,
         status: 'De Acordo',
@@ -178,13 +197,13 @@ export function reconcile(
       })
       deAcordo++
     } else {
-      // Valor Divergente — CNPJ existe mas nenhuma ocorrência disponível tem o mesmo valor
+      // Valor Divergente — chave existe mas nenhuma ocorrência disponível tem o mesmo valor
       for (const field of config.base1.selectedDisplayFields) {
         displayFields[`base1:${field}`] = null
       }
 
       records.push({
-        cnpj: cnpjNorm2,
+        keyValue: keyNorm2,
         valueBase2: valueNorm2,
         valueBase1: null,
         status: 'Valor Divergente',
@@ -192,6 +211,13 @@ export function reconcile(
       })
       divergente++
     }
+  }
+
+  // Emitir aviso de chaves vazias na Base_2
+  if (emptyKeyCount > 0) {
+    warnings.push(
+      `${emptyKeyCount} linha(s) da Base_2 com campo-chave vazio foram tratadas como "Nota não encontrada".`
+    )
   }
 
   const report: ReconciliationReport = {

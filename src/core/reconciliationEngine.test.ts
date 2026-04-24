@@ -11,13 +11,13 @@ function makeConfig(overrides?: Partial<ReconciliationConfig>): ReconciliationCo
   return {
     base1: {
       sheet: 'Sheet1',
-      cnpjColumn: 'CNPJ',
+      keyField: 'CNPJ',
       valueColumn: 'VALOR',
       selectedDisplayFields: [],
     },
     base2: {
       sheet: 'Sheet1',
-      cnpjColumn: 'CNPJ',
+      keyField: 'CNPJ',
       valueColumn: 'VALOR',
       selectedDisplayFields: [],
     },
@@ -115,12 +115,12 @@ describe('reconcile — unitários', () => {
     expect(report.summary.total).toBe(3)
   })
 
-  it('emite aviso para CNPJs duplicados na Base_1', () => {
+  it('emite aviso para chaves duplicadas na Base_1', () => {
     const b1 = [makeRow('X', 100), makeRow('X', 200)]
     const b2 = [makeRow('X', 100)]
     const { warnings } = reconcile(b1, b2, makeConfig())
     expect(warnings.length).toBeGreaterThan(0)
-    expect(warnings[0]).toContain('duplicados')
+    expect(warnings.some((w) => w.includes('Base_1') && w.includes('duplicad'))).toBe(true)
   })
 
   it('Base_2 vazia retorna relatório com 0 registros', () => {
@@ -135,6 +135,7 @@ describe('reconcile — unitários', () => {
     const b1: Row[] = []
     const b2: Row[] = []
     const { report } = reconcile(b1, b2, makeConfig())
+    // visibleColumns[0] é o keyField da Base_2 (no makeConfig = 'CNPJ')
     expect(report.visibleColumns.slice(0, 4)).toEqual([
       'CNPJ',
       'Valor da Nota (Base_2)',
@@ -212,7 +213,7 @@ describe('PBT — Property 6: status exaustivo e semântico', () => {
           const b2Used = new Map<string, number>()
           for (const rec of report.records) {
             if (rec.status === 'De Acordo') {
-              const key = `${rec.cnpj}:${rec.valueBase1}`
+              const key = `${rec.keyValue}:${rec.valueBase1}`
               b2Used.set(key, (b2Used.get(key) ?? 0) + 1)
             }
           }
